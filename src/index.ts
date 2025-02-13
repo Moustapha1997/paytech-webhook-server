@@ -11,14 +11,20 @@ const port = process.env.PORT || 3000;
 // Middlewares
 app.use(cors());
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
-// Routes - Important : le webhook doit être monté sur le chemin racine
-app.use('/', webhookRoutes);
-
-// Test route
-app.get('/health', (_, res) => {
-    res.status(200).json({ status: 'healthy' });
+// Log middleware
+app.use((req, res, next) => {
+    console.log('=== REQUEST RECEIVED ===');
+    console.log('Method:', req.method);
+    console.log('Path:', req.path);
+    console.log('Headers:', req.headers);
+    console.log('Body:', req.body);
+    next();
 });
+
+// Routes
+app.use('/', webhookRoutes);
 
 app.listen(port, () => {
     console.log(`Server running on port ${port}`);
