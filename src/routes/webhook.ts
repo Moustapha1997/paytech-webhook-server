@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express';
-import { PayTechNotification } from '../types/paytech';
+import { PayTechNotification, CustomField } from '../types/paytech';
 import { supabase } from '../config/supabase';
 import { sha256 } from '../utils/crypto';
 
@@ -19,14 +19,20 @@ async function handleWebhook(req: Request, res: Response) {
         const notification = notificationData as PayTechNotification;
         
         // Parse custom_field
-        let customField = {};
+        let customField: CustomField;
         try {
             customField = typeof notification.custom_field === 'string'
                 ? JSON.parse(notification.custom_field)
-                : notification.custom_field || {};
+                : notification.custom_field;
+
+            if (!customField.ref_command) {
+                throw new Error('Missing ref_command in custom_field');
+            }
+
             console.log('Parsed custom field:', customField);
         } catch (e) {
             console.error('Error parsing custom_field:', e);
+            return res.status(400).json({ error: 'Invalid custom_field format' });
         }
 
         if (notification.type_event !== 'sale_complete') {
