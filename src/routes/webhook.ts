@@ -6,33 +6,44 @@ import { sha256 } from '../utils/crypto';
 const router = Router();
 
 async function handleWebhook(req: Request, res: Response) {
-    console.log('=== WEBHOOK CALLED ===');
-    console.log('Headers:', req.headers);
-    console.log('Body:', req.body);
-
+    console.log('=== WEBHOOK HANDLER STARTED ===');
+    
     try {
-        const notification = req.body as PayTechNotification;
-        
-        // Parse custom_field si c'est une string
-        const customField = typeof notification.custom_field === 'string' 
-            ? JSON.parse(notification.custom_field)
-            : notification.custom_field;
+        // Parse les données reçues
+        const notificationData = req.headers['content-type']?.includes('application/x-www-form-urlencoded')
+            ? req.body
+            : typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
 
-        console.log('Custom field:', customField);
+        console.log('Received notification data:', notificationData);
+
+        const notification = notificationData as PayTechNotification;
         
-        if (notification.type_event !== 'sale_complete') {
-            console.log('Ignoring non-sale event:', notification.type_event);
-            res.status(200).json({ status: 'ignored' });
-            return;
+        // Parse custom_field
+        let customField = {};
+        try {
+            customField = typeof notification.custom_field === 'string'
+                ? JSON.parse(notification.custom_field)
+                : notification.custom_field || {};
+            console.log('Parsed custom field:', customField);
+        } catch (e) {
+            console.error('Error parsing custom_field:', e);
         }
 
-        // Vérifier la signature
-        const apiKeyHash = sha256(process.env.PAYTECH_API_KEY!);
-        const apiSecretHash = sha256(process.env.PAYTECH_API_SECRET!);
+        if (notification.type_event !== 'sale_complete') {
+            console.log('Ignoring non-sale event:', notification.type_event);
+            return res.status(200).json({ status: 'ignored' });
+        }
 
-        console.log('Hash verification:', {
-            received_key: notification.api_key_sha256,
-            calculated_key: apiKeyHash,
+        // Vérification des signatures
+        const myApiKey = process.env.PAYTECH_API_KEY!;
+        const myApiSecret = process.env.PAYTECH_API_SECRET!;
+        
+        const apiKeyHash = sha256(myApiKey);
+        const apiSecretHash = sha256(myApiSecret);
+
+        console.log('Signature verification:', {
+            received_key_hash: notification.api_key_sha256,
+            calculated_key_hash: apiKeyHash,
             matches: apiKeyHash === notification.api_key_sha256
         });
 
@@ -41,26 +52,24 @@ async function handleWebhook(req: Request, res: Response) {
             apiSecretHash !== notification.api_secret_sha256
         ) {
             console.error('Invalid signature');
-            res.status(401).json({ error: 'Invalid signature' });
-            return;
+            return res.status(401).json({ error: 'Invalid signature' });
         }
 
-        // Récupérer la réservation en attente
+        // Récupération de la réservation en attente
         const { data: pendingReservation, error: fetchError } = await supabase
             .from('reservations_pending')
             .select('*')
             .eq('ref_command', customField.ref_command)
             .single();
 
-        console.log('Pending reservation:', pendingReservation);
+        console.log('Found pending reservation:', pendingReservation);
 
         if (fetchError || !pendingReservation) {
             console.error('Reservation not found:', customField.ref_command);
-            res.status(404).json({ error: 'Reservation not found' });
-            return;
+            return res.status(404).json({ error: 'Reservation not found' });
         }
 
-        // Créer la réservation confirmée
+        // Création de la réservation confirmée
         const confirmedReservation = {
             ...pendingReservation.reservation_data,
             statut: 'validee',
@@ -72,43 +81,35 @@ async function handleWebhook(req: Request, res: Response) {
             confirmed_at: new Date().toISOString()
         };
 
-        console.log('Confirmed reservation data:', confirmedReservation);
+        console.log('Preparing confirmed reservation:', confirmedReservation);
 
-        // Insérer dans reservations
+        // Insertion dans reservations
         const { error: insertError } = await supabase
             .from('reservations')
             .insert([confirmedReservation]);
 
         if (insertError) {
             console.error('Insert error:', insertError);
-            res.status(500).json({ error: 'Insert failed' });
-            return;
+            return res.status(500).json({ error: 'Insert failed' });
         }
 
-        // Supprimer de reservations_pending
-        const { error: deleteError } = await supabase
+        // Suppression de reservations_pending
+        await supabase
             .from('reservations_pending')
             .delete()
             .eq('ref_command', customField.ref_command);
 
-        if (deleteError) {
-            console.warn('Delete warning:', deleteError);
-        }
-
         console.log('Webhook processing completed successfully');
-        res.status(200).json({ success: true });
+        return res.status(200).json({ success: true });
+
     } catch (error) {
-        console.error('Webhook error:', error);
-        res.status(500).json({ error: 'Webhook processing failed' });
+        console.error('Webhook processing error:', error);
+        return res.status(500).json({ error: 'Webhook processing failed' });
     }
 }
 
-// Route IPN
+// Routes
 router.post('/ipn', handleWebhook);
-
-// Route de test
-router.get('/health', (_, res) => {
-    res.status(200).json({ status: 'healthy' });
-});
+router.get('/health', (_, res) => res.status(200).json({ status: 'healthy' }));
 
 export default router;
