@@ -8,17 +8,17 @@ dotenv.config();
 const app = express();
 const port = process.env.PORT || 3000;
 
-// Middleware
+// Middlewares
 app.use(cors());
 app.use(express.json());
 
-// Route de test
+// Routes - Important : le webhook doit être monté sur le chemin racine
+app.use('/', webhookRoutes);
+
+// Test route
 app.get('/health', (_, res) => {
     res.status(200).json({ status: 'healthy' });
 });
-
-// Routes Webhook
-app.use('/webhook', webhookRoutes);
 
 app.listen(port, () => {
     console.log(`Server running on port ${port}`);
